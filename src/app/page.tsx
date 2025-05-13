@@ -6,45 +6,24 @@ import { getChallengeFromServer, registerUserServerside, getUsers } from "./serv
 import { useEffect } from "react";
 import Link from "next/link";
 import { IUser } from "./models/IUser";
+import { arrayBufferToBase64, base64ToArrayBuffer } from "./Utils/Utils";
 
 export default function Home() {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState("hesterbest@hotmail.com");
   const [challenge, setChallenge] = useState("");
   const [publickeycredential, setPublicKeyCredential] = useState<any>(null);
   const [user, setUser] = useState<IUser>({} as IUser);
   const [userDatabase, setUserDatabase] = useState<IUser[]>([]);
 
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const loadUsers = async () => {
       const users = await getUsers();      
       setUserDatabase(users);
-
-    }, 5000);
+    }
+    const interval = setInterval(() => loadUsers(), 5000);
 
     return () => clearInterval(interval); 
-  }, []);
-
-
-  function arrayBufferToBase64(buffer: any) {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
-
-  function base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binary_string = window.atob(base64);
-    const len = binary_string.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binary_string.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
+  }, []);  
 
   const getPublicKeyCredentialCreationOptions = (username: string, challenge: string) => {
     return {
@@ -87,7 +66,6 @@ export default function Home() {
     // 3. Send attestasjonsobjektet til server for lagring av bruker, men siden det er binært konverterer vi det til base64 først
     console.log("Trekk ut attestasjonsobjektet fra credential");
     const attestasjonsObjektet = arrayBufferToBase64((credential as any).response?.attestationObject);
-
     let user = await registerUserServerside(username, challenge, attestasjonsObjektet);
     setUser(user); // Lagre bruker i state
     console.log("Bruker registrert: ", user);
@@ -197,7 +175,7 @@ export default function Home() {
               </label>
               <input
                 id="username"
-                type="text"
+                type="text"                
                 placeholder="email@domain.com"
                 className="input border border-black-300 rounded-md p-2"
                 onChange={(e) => setUsername(e.target.value)}
