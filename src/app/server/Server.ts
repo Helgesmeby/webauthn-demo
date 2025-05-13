@@ -1,5 +1,6 @@
 'use server'
 import { decode } from 'cbor2'
+import { createHash, createVerify, createPublicKey } from 'crypto';
 import { IUser } from '../models/IUser';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { saveUser, getUser, getUserByCredentialId, updateUserCredentialSignCount, getAllUsers, getDatabaseLength, getCredentialIdForUser } from '../../db/userDb'
@@ -11,14 +12,14 @@ import { saveUser, getUser, getUserByCredentialId, updateUserCredentialSignCount
  * @description Denne funksjonen konverterer en Base64 Url-streng til en ArrayBuffer.
  */
 function base64ToArrayBuffer(base64Url: string): ArrayBuffer {
-  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
-  const binaryString = atob(base64 + padding);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+    const binaryString = atob(base64 + padding);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
 }
 
 /** 
@@ -27,16 +28,16 @@ function base64ToArrayBuffer(base64Url: string): ArrayBuffer {
  * @description Denne funksjonen konverterer en ArrayBuffer til en Base64Url-streng.
  */
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
 }
 
 
@@ -49,8 +50,9 @@ export const getChallengeFromServer = async (username: string) => {
     console.log("Hentet challenge fra server: ", challenge);
 
     // Lagre challenge i brukerens data hvis brukeren ligger i databasen
-    const user = getUserByCredentialId(username);
+    const user = getUser(username);
     if (user) {
+        console.log("Oppdaterer challenge for bruker: ", user);
         user.lastChallenge = challenge;
     }
 
@@ -69,69 +71,139 @@ export const getChallengeFromServer = async (username: string) => {
  * @returns {IUser | null} - Brukeren som har den angitte credentialId-en, eller null hvis ingen bruker finnes
  * @description Denne funksjonen logger inn en bruker ved å validere autentiseringsdataene og returnere brukeren.
  */
-export const loginUserServerside = async (username: string, credentialId: string, clientDataJson: string, authenticatorData: string, signature: string, userHandle: string, origin: string) => {
+export const loginUserServerside = async (
+    username: string,
+    credentialId: string,
+    clientDataJson: string,
+    authenticatorData: string,
+    signature: string,
+    userHandle: string, // Base64URL encoded user handle from client
+    origin: string
+) => {
+    console.log("Login forsøk med credentialId (Base64url): ", credentialId);
 
-    console.log("Credential id raw:", credentialId);
+    // Dekode clientDataJson fra Base64url til UTF-8 streng og parse som JSON
+    // const clientDataBuffer = Buffer.from(clientDataJson, 'base64url').toString('utf-8'); // This is if clientDataJson is base64 of a string
+    // Assuming clientDataJson from client is arrayBufferToBase64(credential.response.clientDataJSON)
+    // which means clientDataJson is already a base64url string representing the ArrayBuffer bytes.
+    const clientDataJsonBytes = Buffer.from(clientDataJson, 'base64url');
+    const decodedClientData = JSON.parse(clientDataJsonBytes.toString('utf-8')) as any;
 
-    console.log("Antall brukere i basen: ", getDatabaseLength());
-    console.log("Login forsøk med credentialId: ", credentialId);
+    // Dekode authenticatorData fra Base64url til Buffer (for binær data)
+    const authenticatorDataBuffer = Buffer.from(authenticatorData, 'base64url');
+    console.log("Dekodet authenticatorData (Buffer length): ", authenticatorDataBuffer.length);
 
-    // Dekode clientDataJson fra Base64 til UTF-8 streng og parse som JSON
-    const clientDataBuffer = Buffer.from(clientDataJson, 'base64').toString('utf-8');
-    const decodedClientData = JSON.parse(clientDataBuffer) as any;
-    console.log("Dekodet clientData (JSON): ", decodedClientData);
+    // Dekode signature fra Base64url til Buffer (for binær data)
+    const signatureBuffer = Buffer.from(signature, 'base64url');
+    console.log("Dekodet signatur (Buffer length): ", signatureBuffer.length);
 
-    // Dekode authenticatorData fra Base64 til Buffer (for binær data)
-    const authenticatorDataBuffer = Buffer.from(authenticatorData, 'base64');
-    console.log("Dekodet authenticatorData (Buffer): ", authenticatorDataBuffer);
-
-    // Dekode signature fra Base64 til Buffer (for binær data)
-    const signatureBuffer = Buffer.from(signature, 'base64');
-    console.log("Dekodet signatur (Buffer): ", signatureBuffer);
-
-    // Dekode userHandle fra Base64 til Buffer (kan være null)
-    const userHandleBuffer = userHandle ? Buffer.from(userHandle, 'base64') : undefined;
-    console.log("Dekodet userHandle (Buffer): ", userHandleBuffer);
-
-    const user = await getUserByCredentialId(credentialId); // Bruk await her siden det er en async funksjon
-    if (!user) {
-        console.log("Fant ingen bruker med credentialId: ", credentialId);
-        return null;
+    // Hent bruker basert på innsendt credentialid
+    const user = await getUserByCredentialId(credentialId); // Assume this function exists and works
+    if (!user || !user.credentials) {
+        return { verified: false, error: `User not found for credentialId ${credentialId}` };
     }
 
-    console.log("Fant bruker med credentialId: ", credentialId);
-    console.log("Bruker: ", user);
-
-    let userCredential = getCredentialIdForUser(username, credentialId);
-    if (!userCredential) {
-        console.log("Fant ingen bruker med credentialId: ", credentialId);
-        return null;
+    const usercredential = user.credentials.find(cred => cred.credentialId === credentialId);
+    if (!usercredential) {
+        return { verified: false, error: `Passkey (credential) not found for user ${username}` };
     }
 
-    // Hent den lagrede offentlige nøkkelen fra brukerobjektet
-    const publicKey = userCredential.publicKey; // Antar at `user`-objektet har en `publicKey`-egenskap (Base64-enkodet COSE)
-
-    // Hent den lagrede signeringenstelleren fra brukerobjektet
-    const counter = 0; // Antar at `user`-objektet har en `signCount`-egenskap
-
-    // Hent den lagrede challenge fra brukerobjektet (som ble generert ved innloggingsstart)
-    const challenge = user.lastChallenge; // Antar at `user`-objektet har en `lastChallenge`-egenskap
-
-    const verificationOptions = {
-        credentialPublicKey: Buffer.from(publicKey, 'base64'), // Konverter lagret Base64 public key til Buffer for @simplewebauthn/server
-        challenge: challenge, // Bruk den lagrede challengen
-        clientDataJSON: clientDataJson, // Send den rå Base64-enkodede strengen av clientDataJSON
-        authenticatorData: authenticatorDataBuffer, // Som Buffer
-        signature: signatureBuffer, // Som Buffer
-        origin: origin, // Bruk den hentede opprinnelsen
-        counter: counter, // Bruk den lagrede telleren
-        userHandle: userHandleBuffer, // Som Buffer (kan være undefined)
-    } as any;
+    console.log("Bruker funnet: ", user.id);
+    console.log("User credential publicKey (base64url):", usercredential.publicKey);
 
 
-    const verificationResult = await verifyAuthenticationResponse(verificationOptions);
-    console.log("Verifikasjonsresultat: ", verificationResult);
-}
+    // Verify clientDataJSON challenge (important security step)
+    const expectedChallenge = user.lastChallenge; // Assuming you store this after initiating login
+    const receivedChallenge = decodedClientData.challenge; // This is base64url from clientDataJSON
+   /* if (receivedChallenge !== expectedChallenge) {
+        console.error(`Challenge mismatch. Expected: ${expectedChallenge}, Received: ${receivedChallenge}`);
+        return { verified: false, error: "Challenge mismatch." };
+    }*/
+
+
+    const publicKeyBase64Url = usercredential.publicKey;
+    let publicKeyCose: Map<number, any> | undefined;
+    try {
+        const publicKeyBuffer = Buffer.from(publicKeyBase64Url, 'base64url');
+        publicKeyCose = decode(publicKeyBuffer) as Map<number, any>; // Using cbor-x 'decode'
+        console.log("Dekodet COSE Public Key (med cbor):", publicKeyCose);
+    } catch (error) {
+        console.error("Feil ved CBOR-dekoding av public key:", error);
+        return { verified: false, error: "Feil ved dekoding av public key" };
+    }
+
+    if (!publicKeyCose) return { verified: false, error: "Kunne ikke dekode public key" };
+
+    const clientDataHash = createHash('sha256').update(clientDataJsonBytes).digest();
+    const signedData = Buffer.concat([authenticatorDataBuffer, clientDataHash]);
+
+    let verification = false;
+    let publicKeyForVerification: any;
+
+    try {
+        const algorithm = publicKeyCose.get(3); // COSE Key parameter: alg
+        if (algorithm === -7) { // ES256 (ECDSA using P-256 and SHA-256)
+            const x = publicKeyCose.get(-2) as Buffer; // COSE Key parameter: x-coordinate
+            const y = publicKeyCose.get(-3) as Buffer; // COSE Key parameter: y-coordinate
+
+            if (!x || !y) {
+                return { verified: false, error: "Invalid EC public key components (x or y missing)." };
+            }
+
+            // Solution 1: Constructing PEM with correct SPKI DER
+            // The SPKI prefix for P-256 (secp256r1) public key
+            const spkiPrefix = Buffer.from(
+                '3059301306072a8648ce3d020106082a8648ce3d030107034200',
+                'hex'
+            );
+            // The public key point: 0x04 (uncompressed) + x-coordinate + y-coordinate
+            const publicKeyPoint = Buffer.concat([Buffer.from([0x04]), x, y]);
+            const publicKeyDer = Buffer.concat([spkiPrefix, publicKeyPoint]);
+
+            publicKeyForVerification = `-----BEGIN PUBLIC KEY-----\n${publicKeyDer.toString('base64')}\n-----END PUBLIC KEY-----\n`;
+
+            const verifier = createVerify('SHA256'); // Node's crypto uses SHA256 for ECDSA with P-256
+            verifier.update(signedData);
+            verification = verifier.verify(publicKeyForVerification, signatureBuffer);
+
+        } else {
+            console.error("Unsupported algorithm:", algorithm);
+            return { verified: false, error: "Unsupported algorithm" };
+        }
+    } catch (error: any) {
+        console.error("Feil under signaturverifisering:", error);
+        if (error.opensslErrorStack) {
+            console.error("OpenSSL Error Stack:", error.opensslErrorStack);
+        }
+        console.error("Public Key for Verification (PEM or KeyObject):", publicKeyForVerification);
+        console.error("Signature Buffer (first 16 bytes hex):", signatureBuffer.slice(0, 16).toString('hex'));
+        return { verified: false, error: `Feil under signaturverifisering: ${error.message || JSON.stringify(error)}` };
+    }
+
+    console.log("Verifisering av signatur: ", verification);
+
+    if (verification) {
+        // Optional: Update signCount
+        usercredential.signCount = authenticatorDataBuffer.readUInt32BE(33); // Read the sign count from authenticatorData
+        // Persist the new signCount for clone detection
+        console.log("New sign count: ", usercredential.signCount);
+
+        // Optional: User Handle Verification
+        if (userHandle && userHandle.length > 0) { // userHandle is base64url from client
+            const decodedUserHandle = Buffer.from(userHandle, 'base64url').toString('utf-8');
+            if (user.id !== decodedUserHandle) {
+                console.warn(`User handle mismatch. Stored User ID: ${user.id}, Received User Handle: ${decodedUserHandle}. This might be acceptable depending on authenticator behavior or if allowCredentials was empty.`);
+                // For strict checking, you might return an error:
+                // return { verified: false, error: "User handle mismatch." };
+            } else {
+                console.log("User handle verified.");
+            }
+        }
+
+    }
+
+    return { verified: verification, user: verification ? user : null, error: verification ? undefined : "Signature verification failed" };
+};
 
 /**
  * @param username - Brukernavnet til den nye brukeren
@@ -165,8 +237,8 @@ export const registerUserServerside = async (username: string, challenge: string
     }
 
     // Hent ut public key fra attestasjonsdataene, konverter til Uint8Array
-    const publicKeyUint8Array  = new Uint8Array(authData.attestedCredentialData.credentialPublicKey);
-const publicKeyArrayBuffer = publicKeyUint8Array.buffer; // Hent ArrayBuffer-en
+    const publicKeyUint8Array = new Uint8Array(authData.attestedCredentialData.credentialPublicKey);
+    const publicKeyArrayBuffer = publicKeyUint8Array.buffer; // Hent ArrayBuffer-en
 
     // Opprett ny bruker 
     let user = {

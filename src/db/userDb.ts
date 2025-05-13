@@ -4,6 +4,20 @@ import { IUserCredential } from '../app/models/IUserCredential';
 // Bruk en Map for å lagre brukere, med brukernavn som nøkkel
 const userDatabase = new Map<string, IUser>();
 
+// Hardkod bruker for testing, siden den ikke persister over hot reloads 
+/*userDatabase.set("hesterbest@hotmail.com", {
+  id: 'hesterbest@hotmail.com',
+  credentials: [
+    {
+      username: 'hesterbest@hotmail.com',
+      credentialId: '5kxYC0LtW9BZ8H7fLPcm5-VgffBN6aEi8PVovbsUEQ4',
+      publicKey: 'pQECAyYgASFYIN3UqculDvLLlTfkGRaT360sOqmgT8gyVlibdsZ-6GLkIlgguvsM3gaWnhverOgHrkSFqO49IBvZF94g0Jx0hCYXaEo',
+      signCount:0
+    }
+  ],
+  lastChallenge: 'kfq5haux'
+})*/
+
 export const saveUser = (user: IUser) => {
     userDatabase.set(user.id, user);
 };
